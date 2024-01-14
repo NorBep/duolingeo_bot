@@ -1,6 +1,11 @@
-use std::{error::Error, thread::sleep, process::Command, collections::HashMap};
-use thirtyfour::prelude::*;
+use std::collections::HashMap;
+use std::process::Command;
+use std::thread::sleep;
+use std::error::Error;
 use std::env;
+
+use thirtyfour::prelude::*;
+use lingual::{Lang, blocking::translate};
 use tokio;
 // 528ffzlg9@mozmail.com
 // Cw;-)X42&+w9MD!
@@ -11,12 +16,13 @@ struct Settings {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct LanguageTranslation {
-    words: Vec<String>,
-    language: String,
+    words: String,
+    from_language: Lang,
+    to_language: Lang,
 }
 
 struct TranslationDictionary {
-    translations: HashMap<LanguageTranslation, LanguageTranslation>,
+    translations: HashMap<LanguageTranslation, Vec<String>>,
 }
 
 impl TranslationDictionary {
@@ -28,18 +34,68 @@ impl TranslationDictionary {
 
     /// this is going to translate both words and sentences
     /// where if the word/sentence is not in the dictionary
-    /// it calles the google translate api and adds it to 
+    /// it calls the google translate api and adds it to 
     /// the dictionary
     /// 
     /// if the word/sentence is in the dictionary
     /// it will be returned
     
-    fn translate(&mut self, words: &Vec<String>, from_language: String, to_language: String) -> String {
-        todo!("find a good way to structure this")
+    fn translate(&mut self, words: &Vec<String>, from_language: Lang, to_language: Lang) -> String {
+        if words.len() == 1 {
+            // find if the word translation is in the dictionary
+            let language_translation = LanguageTranslation {
+                words: words[0].clone(),
+                from_language: from_language.clone(),
+                to_language: to_language.clone(),
+            };
+
+            match self.translations.get(&language_translation) {
+                Some(translations) => {
+                    // return the first translation
+                    return translations[0].clone();
+                },
+                None => {
+                    // translate the word
+                    // add the translation to the dictionary
+                    // return the translation
+                    let translated_word = translate(words[0].clone(), Some(Lang::En), Some(Lang::Nl)).unwrap().text().to_string();
+                    self.translations.insert(language_translation, vec![translated_word.clone()]);
+                    return translated_word;
+                },
+            }
+        } else {
+            let sentence = words.join(" ");
+            todo!("translate sentence")
+        }
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
 
+    #[test]
+    fn test_translation_dictionary() {
+        let mut translation_dictionary = TranslationDictionary::new();
+
+        let words = vec!["Goodnight".to_string()];
+        let from_language = Lang::En;
+        let to_language = Lang::Nl;
+        
+        let start = std::time::Instant::now();
+        let translation = translation_dictionary.translate(&words, from_language, to_language);
+        let end = std::time::Instant::now();
+        println!("Time to translate: {:?}", end - start);
+        assert_eq!(translation, "Welterusten");
+
+        // now the translation should be in the dictionary and should take less time
+        let start = std::time::Instant::now();
+        let translation = translation_dictionary.translate(&words, from_language, to_language);
+        let end = std::time::Instant::now();
+        println!("Time to translate: {:?}", end - start);
+        assert_eq!(translation, "Welterusten");
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
