@@ -16,7 +16,7 @@ struct Settings {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 struct LanguageTranslation {
-    words: String,
+    text: String,
     from_language: Lang,
     to_language: Lang,
 }
@@ -40,32 +40,42 @@ impl TranslationDictionary {
     /// if the word/sentence is in the dictionary
     /// it will be returned
     
-    fn translate(&mut self, words: &Vec<String>, from_language: Lang, to_language: Lang) -> String {
-        if words.len() == 1 {
-            // find if the word translation is in the dictionary
-            let language_translation = LanguageTranslation {
-                words: words[0].clone(),
-                from_language: from_language.clone(),
-                to_language: to_language.clone(),
-            };
-
-            match self.translations.get(&language_translation) {
-                Some(translations) => {
-                    // return the first translation
-                    return translations[0].clone();
-                },
-                None => {
-                    // translate the word
-                    // add the translation to the dictionary
-                    // return the translation
-                    let translated_word = translate(words[0].clone(), Some(Lang::En), Some(Lang::Nl)).unwrap().text().to_string();
-                    self.translations.insert(language_translation, vec![translated_word.clone()]);
-                    return translated_word;
-                },
+    fn translate(&mut self, text: &[String], from_language: Lang, to_language: Lang) -> String {    
+        // generate the key for the hash dictionary
+        let language_translation = if text.len() == 1 {
+            LanguageTranslation {
+                text: text[0].clone(),
+                from_language,
+                to_language,
             }
         } else {
-            let sentence = words.join(" ");
-            todo!("translate sentence")
+            let sentence = text.join(" ");
+            LanguageTranslation {
+                text: sentence,
+                from_language,
+                to_language,
+            }
+        };
+        
+        match self.translations.get(&language_translation) {
+            Some(translations) => {
+                // find out if the translation is a word or a sentence
+                // if it is a word return the translation
+                // if it is a sentence return the translation with the words in the same order
+                if text.len() == 1 {
+                    translations[0].clone()
+                } else {
+                    translations.join(" ")
+                }    
+            },
+            None => {
+                // translate the word
+                // add the translation to the dictionary
+                // return the translation
+                let translated_word = translate(language_translation.text.clone(), Some(Lang::En), Some(Lang::Nl)).unwrap().text().to_string();
+                self.translations.insert(language_translation, vec![translated_word.clone()]);
+                translated_word
+            },
         }
     }
 }
@@ -78,7 +88,7 @@ mod tests {
     fn test_translation_dictionary() {
         let mut translation_dictionary = TranslationDictionary::new();
 
-        let words = vec!["Goodnight".to_string()];
+        let words = vec!["Have a good night sleep and goodnight".to_string()];
         let from_language = Lang::En;
         let to_language = Lang::Nl;
         
@@ -86,14 +96,14 @@ mod tests {
         let translation = translation_dictionary.translate(&words, from_language, to_language);
         let end = std::time::Instant::now();
         println!("Time to translate: {:?}", end - start);
-        assert_eq!(translation, "Welterusten");
+        assert_eq!(translation, "Heb een goede nachtrust en welterusten");
 
         // now the translation should be in the dictionary and should take less time
         let start = std::time::Instant::now();
         let translation = translation_dictionary.translate(&words, from_language, to_language);
         let end = std::time::Instant::now();
         println!("Time to translate: {:?}", end - start);
-        assert_eq!(translation, "Welterusten");
+        assert_eq!(translation, "Heb een goede nachtrust en welterusten");
     }
 }
 
