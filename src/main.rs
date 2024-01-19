@@ -168,16 +168,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 async fn do_lessons(driver: &WebDriver) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut translation_dictionary = Arc::new(Mutex::new(TranslationDictionary::new()));
     let lessons = driver.find_all(By::XPath("//div[@class='_31n11 _3DQs0']")).await?;
-    let amount_of_lessons_regex = regex::Regex::new(r#"(?m)[0-9]"#).unwrap();
+    let amount_of_lessons_regex = regex::Regex::new(r#"(?m)\d+"#).unwrap();
 
     for lesson in lessons {
         lesson.click().await?;
         let amount_of_lessons_text = driver.find(By::XPath("//p[@class='_3DPNK']"))
             .await?.text().await?;
-        let regex_capture = amount_of_lessons_regex.captures(&amount_of_lessons_text).unwrap();
-        println!("{:?}", regex_capture);
-        let lessons_done: u8 = regex_capture.get(0).unwrap().as_str().parse().unwrap();
-        let lessons_total: u8 = regex_capture.get(1).unwrap().as_str().parse().unwrap();
+        let regex_capture = amount_of_lessons_regex.captures_iter(&amount_of_lessons_text).collect::<Vec<_>>();
+        let lessons_done: u8 = regex_capture.get(0).unwrap()[0].parse().unwrap();
+        let lessons_total: u8 = regex_capture.get(1).unwrap()[0].parse().unwrap();
         let lessons_left = lessons_total - lessons_done;
 
         for _ in 0..lessons_left {
