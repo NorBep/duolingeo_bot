@@ -64,8 +64,7 @@ impl TranslationDictionary {
 
     /// this is going to translate both words and sentences
     /// where if the word/sentence is not in the dictionary
-    /// it calls the google translate api and adds it to 
-    /// the dictionary
+    /// it uses the async translate function to translate the word/sentence
     /// 
     /// if the word/sentence is in the dictionary
     /// it will be returned
@@ -132,8 +131,21 @@ impl TranslationDictionary {
                 self.translations.insert(language_translation, translated_word.clone());
                 translated_word
             },
-        }
+        }    
+    }
+
+    fn insert_translation(&mut self, from_text: String, from_language: Lang, to_language: Lang, translated_text: String) {
+        let language_translation = LanguageTranslation {
+            text: from_text,
+            from_language,
+            to_language,
+        };
     
+        // insert the translation into the dictionary but first check if it is not already in the dictionary then remove it
+        if self.translations.contains_key(&language_translation) {
+            self.translations.remove(&language_translation);
+        }
+        self.translations.insert(language_translation, translated_text);
     }
 }
 
@@ -155,18 +167,30 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         sleep(std::time::Duration::from_millis(100));
     }
     sleep(std::time::Duration::from_secs(2));
-    // checks if there is a popup
+    let mut translation_dictionary = Arc::new(Mutex::new(TranslationDictionary::new()));
+
     let popup = driver.find(By::XPath("//button[@data-test='notification-drawer-no-thanks-button']"))
         .await;
     if popup.is_ok() {
         popup.unwrap().click().await?;
     }
-    do_lessons(&driver).await?;
+    let hearts = driver.find(By::XPath("//span[@class='_2WjcG _2IhxH _2_xxd']")).await?;
+    let amount_of_hearts: u8 = hearts.text().await?.parse().unwrap();
+    if amount_of_hearts < 5 {
+        hearts.click().await?;
+        hearts.click().await?;
+        sleep(std::time::Duration::from_millis(100));
+        let buttons = driver.find_all(By::XPath("//button[@class='_1N-oo _36Vd3 _16r-S _37iKA']"))
+            .await?;
+        buttons[1].click().await?;
+        solve_challanges(&driver, &mut translation_dictionary).await?;
+    }
+
+    do_lessons(&driver, &mut translation_dictionary).await?;
     Ok(())
 }
 
-async fn do_lessons(driver: &WebDriver) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut translation_dictionary = Arc::new(Mutex::new(TranslationDictionary::new()));
+async fn do_lessons(driver: &WebDriver, translation_dictionary: &mut Arc<Mutex<TranslationDictionary>>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let lessons = driver.find_all(By::XPath("//div[@class='_31n11 _3DQs0']")).await?;
     let amount_of_lessons_regex = regex::Regex::new(r#"(?m)\d+"#).unwrap();
 
@@ -182,7 +206,7 @@ async fn do_lessons(driver: &WebDriver) -> Result<(), Box<dyn Error + Send + Syn
         for _ in 0..lessons_left {
             driver.find(By::XPath("//a[@class='_30qMV _2N_A5 _36Vd3 _16r-S KSXIb _2CJe1 _12StQ']")).await?.click().await?;
             println!("Entered lesson {}/{}", lessons_done, lessons_total);
-            solve_challanges(&driver, &mut translation_dictionary).await?;
+            solve_challanges(&driver, translation_dictionary).await?;
             sleep(std::time::Duration::from_secs(1));
         }
     }
@@ -221,24 +245,32 @@ enum ChallangeTypes {
     Translate,
     Assist,
     Match,
+    Name,
+    PartialReverseTranslate,
     Cannot,
     Ignore,
 }
 
 async fn solve_challanges(driver: &WebDriver, translation_dictionary: &mut Arc<Mutex<TranslationDictionary>>) -> Result<(), Box<dyn Error + Send + Sync>> {
-    sleep(std::time::Duration::from_secs(2));  
+    sleep(std::time::Duration::from_secs(3));  
     loop {
         match get_challange_type(driver).await? {
             ChallangeTypes::Select => solve_select_challange(driver, translation_dictionary).await?,
             ChallangeTypes::Translate => solve_translate_challange(driver, translation_dictionary).await?,
             ChallangeTypes::Assist => solve_assist_challange(driver, translation_dictionary).await?,
             ChallangeTypes::Match => solve_match_challange(driver, translation_dictionary).await?,
+            ChallangeTypes::Name => panic!("name is not implemented"),
+            ChallangeTypes::PartialReverseTranslate => solve_partial_reverse_translate_challange(driver, translation_dictionary).await?,
             ChallangeTypes::Cannot => panic!("cannot is not implemented"),
-            ChallangeTypes::Ignore => println!("Skipping motivaton"),
+            ChallangeTypes::Ignore => {
+                sleep(std::time::Duration::from_secs(1));
+                println!("Skipping motivaton");
+            },
         }
         let next_button = driver.find(By::XPath("//button[@data-test='player-next']")).await?;
+        next_button.wait_until().clickable().await?;
         next_button.click().await?;
-        sleep(std::time::Duration::from_secs(1));
+        sleep(std::time::Duration::from_millis(100));
         if driver.current_url().await?.as_str() == "https://www.duolingo.com/learn" {
             break;
         }
@@ -255,6 +287,8 @@ async fn get_challange_type(driver: &WebDriver) -> Result<ChallangeTypes, Box<dy
                 "challenge-translate" => ChallangeTypes::Translate,
                 "challenge-select" => ChallangeTypes::Select,
                 "challenge-assist" => ChallangeTypes::Assist,
+                "challenge-name" => ChallangeTypes::Name,
+                "challenge-partialReverseTranslate" => ChallangeTypes::PartialReverseTranslate,
                 "challenge-match" => ChallangeTypes::Match,
                 "challenge-listen" => ChallangeTypes::Cannot,
                 _ => panic!("Unknown challange type: {}", challange_type_str),
@@ -330,9 +364,18 @@ async fn solve_assist_challange(driver: &WebDriver, translation_dictionary: &mut
 }
 
 async fn solve_translate_challange(driver: &WebDriver, translation_dictionary: &mut Arc<Mutex<TranslationDictionary>>) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let sentence = driver.find(By::XPath("//span[@class='g-kCu']")).await?.text().await?;
-    let from_lang = translation_dictionary.lock().await.find_language(&sentence).await;
+    let challange_header = driver.find(By::XPath("//h1[@data-test='challenge-header']"))
+        .await?
+        .text()
+        .await?;
+    let from_lang = match challange_header.to_lowercase().as_str() {
+        "write this in english" => Lang::Nl,
+        "write this in dutch" => Lang::En,
+        _ => panic!("Unknown language"),
+    };
     let to_lang = if from_lang == Lang::En { Lang::Nl } else { Lang::En };
+    println!("From language: {:?}, To language: {:?}", from_lang, to_lang);
+    let sentence = driver.find(By::XPath("//span[@class='g-kCu']")).await?.text().await?;
     println!("Translating: {}", sentence);
     let translated_sentence = translation_dictionary.lock().await.lookup_async(&[sentence], from_lang, to_lang).await;
     println!("Translated: {}", translated_sentence);
@@ -345,13 +388,17 @@ async fn solve_translate_challange(driver: &WebDriver, translation_dictionary: &
         sentence_input.send_keys(" ").await?;
     }
     sentence_input.send_keys(" " + Key::Enter).await?;
+    if driver.find(By::XPath("//div[@data-test='blame blame-incorrect']")).await.is_ok() {
+        let duolingo_translation = driver.find(By::XPath("//div[@class='_1UqAr _3Qruy']")).await?.text().await?;
+        println!("Duolingo translation: {}", duolingo_translation);
+    }
     Ok(())
 }
 
 async fn solve_match_challange(driver: &WebDriver, translation_dictionary: &mut Arc<Mutex<TranslationDictionary>>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let cards = driver.find_all(By::XPath("//span[@data-test='challenge-tap-token-text']")).await?;
     // take only half of the card because the amount of cards are always equal
-    // tranlate them and match them use the indexes and presses the cards
+    // tranlate them and match them use the indexes and send the key presses
     let mut card_texts = Vec::new();
     for card in &cards{
         card_texts.push(card.text().await?.to_owned());
@@ -359,7 +406,7 @@ async fn solve_match_challange(driver: &WebDriver, translation_dictionary: &mut 
     let half = card_texts.len() / 2;
     let from_cards = &card_texts[..half];
     let to_cards = &card_texts[half..];
-    // translate the from cards to compare them with the to cards
+    // translate the from_cards to compare them with the to_cards
     let mut translated_from_cards = Vec::new();
     from_cards.iter().for_each(|card| {
         let translation_dictionary = Arc::clone(translation_dictionary);
@@ -390,6 +437,25 @@ async fn solve_match_challange(driver: &WebDriver, translation_dictionary: &mut 
         body.send_keys(key_presses2).await?;
         sleep(std::time::Duration::from_millis(100));
     }
+    Ok(())
+}
+
+async fn solve_partial_reverse_translate_challange(driver: &WebDriver, translation_dictionary: &mut Arc<Mutex<TranslationDictionary>>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let sentence = driver.find(By::XPath("//span[@class='g-kCu']")).await?.text().await?;
+    let from_lang = translation_dictionary.lock().await.find_language(&sentence).await;
+    let to_lang = if from_lang == Lang::En { Lang::Nl } else { Lang::En };
+    let _translated_sentence = translation_dictionary.lock().await.lookup_async(&[sentence], from_lang, to_lang).await;
+    // this above is only to get the translation in the dictionary
+    let rest_sentence = driver.find(By::XPath("//span[@class='_31xxw _2eX9t _1vqO5']")).await?.text().await?;
+    let text_entry = driver.find(By::XPath("//label[@class='_1fYGK _2FKqf _2ti2i']")).await?;
+    text_entry.focus().await?;
+    println!("1");
+    for char in rest_sentence.chars() {
+        text_entry.send_keys(format!("{}", char)).await?;
+        sleep(std::time::Duration::from_millis(10));
+    }
+    text_entry.send_keys(" " + Key::Enter).await?;
+    println!("2");
     Ok(())
 }
 
